@@ -2,6 +2,10 @@ from flask import Flask,jsonify,request
 from flask_cors import CORS
 from sqlalchemy import func
 from dbservice import *
+import jwt
+from datetime import timedelta,datetime
+from functools import wraps
+
 # from flask_sqlalchemy import SQLAlchemy
 
 
@@ -10,13 +14,67 @@ from dbservice import *
 
 # enabling cross-origin resource sharing
 CORS(app)
+app.config["SECRET_KEY"]="secret_key"
 
 # creating a database connection
 
 # db=SQLAlchemy(app)
 
+# token_required decorator function
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token=request.headers.get("Authorization")
+
+        if token is None:
+            return jsonify({"message" : "couldn't validate user,token is missing"}), 401
+        
+        try:
+            data=jwt.decode(token, app.config["SECRET_KEY"], algorithms=["HS256"])
+            current_user= data["sub"]
+
+            return f(current_user,*args,**kwargs)
+        except Exception as e:
+            return jsonify({"error":"error decoding token. Confirm your secret key"}),401
+
+
+    return decorated
+
+
+
+
+
+
+# creating a login route
+@app.post('/login')
+def login():
+
+    data=request.json
+    u=data["username"]
+    p=data["password"]
+
+    existing_user = db.session.query(User).filter(User.username==u, User.user_password==p).first()
+
+    if existing_user is None:
+        return jsonify({"error":"invalid credentials!"}), 400
+    try:
+
+        access_token = jwt.encode({"sub":u, "exp": datetime.utcnow() + timedelta(minutes=30)}, app.config["SECRET_KEY"])
+
+        return jsonify({"message":"user login succesful!","access_token":access_token})
+
+    except Exception as e:
+        return jsonify({"error creating access token":e})
+
+
+
+
+
+
 @app.route('/products', methods=['GET','POST'])
-def products():
+@token_required
+def products(current_user):
     if request.method=='POST':
         try:
             data=request.json
@@ -46,6 +104,10 @@ def products():
         
     elif request.method=='GET':
         try:
+            user=db.session.query(User).filter(User.username==current_user).first()
+            if not user:
+                return jsonify({"message": "user not found"})
+            
             products=db.session.query(Product).all()
             prods=[]
             for product in products:
